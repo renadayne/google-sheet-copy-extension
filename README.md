@@ -68,22 +68,33 @@ quay lại đúng tab và ô đang dở. Khi xong hoặc hủy, con trỏ đư�
   tệ, phần trăm và số dùng dấu phẩy thập phân được ghi thành văn bản. Định dạng số không được
   giữ.
 - Ô trống không được ghi lại, nên ô trống có màu nền sẽ mất màu.
-- Định dạng lấy từ thanh công cụ, nên áp cho cả ô. Định dạng nhiều kiểu trong một ô (rich text)
-  bị mất.
+- Ô mà Sheets đã tự đổi kiểu sẽ ra giá trị gốc chứ không phải chữ đang hiển thị. Ví dụ ô hiện
+  `2.4` nhưng thực chất là ngày thì xuất ra `02/04/2026`.
+
+**Về định dạng**
+
+- **Sheet ở chế độ chỉ xem không có định dạng.** Định dạng được đọc từ các nút trên thanh công
+  cụ (font, cỡ chữ, đậm, nghiêng, màu chữ, màu nền, canh lề), và Sheets ẩn các nút này khi bạn
+  chỉ có quyền xem. File xuất ra khi đó chỉ có giá trị, ô gộp và bố cục ước lượng.
+- Khi có quyền sửa, định dạng lấy từ thanh công cụ nên áp cho cả ô. Định dạng nhiều kiểu trong
+  một ô (rich text) bị mất.
+- Độ rộng cột và chiều cao hàng không đọc được. File xlsx ước lượng chúng từ nội dung: cột vừa
+  với dòng dài nhất (tối đa 60 ký tự), chữ tự xuống dòng và canh giữa theo chiều dọc.
 - Không đọc: viền ô, gạch chân (thanh công cụ Sheets không có nút này), gạch ngang, canh lề dọc,
-  xuống dòng tự động, độ rộng cột, chiều cao hàng, định dạng có điều kiện, kiểm tra dữ liệu, ghi
-  chú, bình luận, liên kết, hình ảnh, biểu đồ.
+  định dạng có điều kiện, kiểm tra dữ liệu, ghi chú, bình luận, liên kết, hình ảnh, biểu đồ.
 
 **Về ô gộp**
 
-- Phát hiện ô gộp dựa trên name box và cách con trỏ di chuyển, không phải dữ liệu gốc. Ô gộp
-  trống có thể không được phát hiện.
+- Ô gộp được đọc từ name box, vốn hiện cả vùng gộp (ví dụ `A4:A6`) khi con trỏ đứng trong đó.
+  Ô gộp hoàn toàn trống nằm giữa vùng trống có thể bị nhảy qua và không được ghi lại.
 - Nếu một hàng không tới được, phần còn lại của hàng đó bị bỏ qua và popup ghi cảnh báo.
 
 **Về vận hành**
 
-- Tốc độ khoảng vài mili giây đến vài chục mili giây mỗi ô có dữ liệu. Sheet hàng chục nghìn ô
-  sẽ mất nhiều phút.
+- Sheets chỉ xử lý một phím điều hướng mỗi khung hình, nên tốc độ tối đa khoảng 60 ô mỗi giây
+  khi tab đang hiển thị. Sheet hàng chục nghìn ô sẽ mất nhiều phút.
+- Giữ tab Sheets hiển thị trong lúc quét. Khi tab bị ẩn hoặc cửa sổ bị thu nhỏ, trình duyệt
+  ngừng vẽ khung hình và việc quét chậm lại còn khoảng một ô mỗi giây.
 - Không dùng sheet trong lúc quét (trừ khi đã tạm dừng): extension điều khiển con trỏ của trang.
 - Vùng quét bắt đầu từ A1. Số cột lấy từ ô mà Ctrl+End dừng lại; số hàng được thu hẹp về hàng
   cuối có dữ liệu bằng cách dò Ctrl+↑ ở từng cột, nên sheet có rất nhiều cột sẽ mất thêm thời

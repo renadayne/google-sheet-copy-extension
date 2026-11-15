@@ -26,12 +26,53 @@ const KEY_CODES: Record<NavKey | 'Enter', number> = {
 };
 
 const GO_TO_TIMEOUT_MS = 2_000;
-const MOVE_TIMEOUT_MS = 400;
+/**
+ * How long to wait for a key press to move the selection. Generous on purpose: a
+ * press Sheets has queued still lands eventually, and giving up early would leave
+ * it pending while the scan carries on.
+ */
+const MOVE_TIMEOUT_MS = 2_000;
 /** Reads of the formula bar before accepting its text as settled. */
 const READ_ATTEMPTS = 3;
+/** Tries at probing one column before giving up on narrowing the scan. */
+const PROBE_ATTEMPTS = 3;
 const POLL_INTERVAL_MS = 5;
 
 export const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Resolves after the page has rendered a frame.
+ *
+ * Sheets acts on at most one navigation key per animation frame. A key sent
+ * sooner is not lost but queued and replayed later, which moves the selection
+ * behind the scan's back. So every action that moves the selection is followed
+ * by a frame before the next one.
+ *
+ * There is deliberately no timeout. In a hidden tab frames stop, and carrying on
+ * without them would queue keys and corrupt the scan, so the scan simply waits
+ * until the tab is visible again. Aborting the scan (see setScanSignal) is the
+ * way out.
+ */
+export function nextFrame(): Promise<void> {
+  return new Promise((resolve) => {
+    const signal = scanSignal;
+    if (signal?.aborted) return resolve();
+    const done = () => {
+      cancelAnimationFrame(frame);
+      signal?.removeEventListener('abort', done);
+      resolve();
+    };
+    const frame = requestAnimationFrame(done);
+    signal?.addEventListener('abort', done, { once: true });
+  });
+}
+
+let scanSignal: AbortSignal | undefined;
+
+/** Lets an abort release a scan that is waiting for a frame in a hidden tab. */
+export function setScanSignal(signal: AbortSignal | undefined): void {
+  scanSignal = signal;
+}
 
 /** Polls until `predicate` is true; resolves false if it never is within the timeout. */
 export async function waitFor(predicate: () => boolean, timeoutMs: number): Promise<boolean> {
@@ -105,29 +146,33 @@ export function currentSelection(): { first: CellPosition; last: CellPosition } 
   return first && last ? { first, last } : null;
 }
 
-/** Moves the selection to `a1` by typing it into the name box and pressing Enter. */
+/**
+ * Moves the selection to `a1` by typing it into the name box and pressing Enter.
+ *
+ * Resolves once Sheets has acted on it, not merely once the text is in the box.
+ * The reference is typed in lower case; Sheets rewrites the name box in its own
+ * form ("a5" becomes "A5", or "A4:A6" if that cell is part of a merge) when it
+ * moves the selection, and that rewrite is the signal. Without it, a read made
+ * straight after would still see the previous cell.
+ */
 export async function goToCell(a1: string): Promise<void> {
   const nameBox = getNameBox();
   if (!nameBox) throw new Error('Name box (#t-name-box) not found');
 
+  const typed = a1.trim().toLowerCase();
   nameBox.focus();
   nameBox.select();
-  nameBox.value = a1;
+  nameBox.value = typed;
   nameBox.dispatchEvent(new Event('input', { bubbles: true }));
   dispatchKey(nameBox, 'Enter');
 
-  // Sheets hands focus back to the grid once it has accepted the reference.
-  // A merged cell may be reported as a range ("A1:B2"), so compare its first corner.
-  const target = parseA1(a1, 'first');
-  const moved = await waitFor(() => {
-    if (document.activeElement === nameBox) return false;
-    if (normalizeRef(nameBox.value) === normalizeRef(a1)) return true;
-    const here = parseA1(nameBox.value, 'first');
-    return !!target && here?.row === target.row && here.col === target.col;
-  }, GO_TO_TIMEOUT_MS);
+  const moved = await waitFor(
+    () => document.activeElement !== nameBox && nameBox.value !== typed,
+    GO_TO_TIMEOUT_MS,
+  );
+  // Always let a frame pass, even on failure, so the next action is not queued.
+  await nextFrame();
   if (!moved) throw new Error(`Could not navigate to ${a1}`);
-  // Let Sheets finish updating the formula bar and toolbar for the new cell.
-  await sleep(0);
 }
 
 /**
@@ -138,8 +183,7 @@ export async function pressNavKey(key: NavKey, { ctrl = false } = {}): Promise<b
   const before = readNameBox();
   dispatchKey(document.activeElement ?? document.body, key, ctrl);
   const moved = await waitFor(() => readNameBox() !== before, MOVE_TIMEOUT_MS);
-  // Let Sheets finish updating the formula bar and toolbar for the new cell.
-  if (moved) await sleep(0);
+  await nextFrame();
   return moved;
 }
 
@@ -165,6 +209,18 @@ export async function readStableText(): Promise<string> {
 }
 
 /**
+ * Reads the active cell's reference and text as a pair. Resolves null if the
+ * selection moved while reading (a key press Sheets had queued caught up), since
+ * the text could then belong to either cell.
+ */
+export async function readCell(): Promise<{ ref: string; text: string } | null> {
+  const ref = readNameBox();
+  if (!ref) return null;
+  const text = await readStableText();
+  return readNameBox() === ref ? { ref, text } : null;
+}
+
+/**
  * Last row that holds data in any of the first `cols` columns, probing each column
  * from `bottomRow` with Ctrl+Up. Falls back to `bottomRow` if a probe cannot be
  * trusted, so data is never cut off.
@@ -178,29 +234,45 @@ async function findLastDataRow(
   let lastRow = 1;
 
   for (let col = 1; col <= cols; col++) {
-    signal?.throwIfAborted();
-    try {
-      await goToCell(`${columnLetters(col)}${bottomRow}`);
-    } catch {
-      // Not reachable, e.g. covered by a merge that another column's probe will find.
-      continue;
+    let probed: number | null = null;
+    for (let attempt = 1; attempt <= PROBE_ATTEMPTS && probed === null; attempt++) {
+      signal?.throwIfAborted();
+      probed = await probeColumn(col, bottomRow);
     }
-    // Data in the bottom row itself: nothing to trim.
-    if ((await readStableText()) !== '') return bottomRow;
-
-    // From an empty cell, Ctrl+Up lands on the nearest cell with data above it,
-    // or on row 1 if the column is empty.
-    const moved =
-      (await pressNavKey('ArrowUp', { ctrl: true })) ||
-      (await pressNavKey('ArrowUp', { ctrl: true }));
-    const landed = currentCell();
-    if (!moved || !landed) return bottomRow;
-
-    // The landing cell may be the top of a merge; count the whole merge as data.
-    const reach = parseA1(readNameBox() ?? '', 'last')?.row ?? landed.row;
-    if ((await readStableText()) !== '') lastRow = Math.max(lastRow, reach);
+    if (probed === null) return bottomRow;
+    lastRow = Math.max(lastRow, probed);
+    if (lastRow >= bottomRow) return bottomRow;
   }
   return lastRow;
+}
+
+/**
+ * Last row with data in one column, 0 if the column is empty, or null if the
+ * probe did not work this time. Starting again from the name box clears any key
+ * press Sheets may still have queued.
+ */
+async function probeColumn(col: number, bottomRow: number): Promise<number | null> {
+  try {
+    await goToCell(`${columnLetters(col)}${bottomRow}`);
+  } catch {
+    return null;
+  }
+  const bottom = await readCell();
+  // A merge reaching the bottom row is reported as its whole range.
+  if (parseA1(bottom?.ref ?? '', 'last')?.row !== bottomRow) return null;
+  if (parseA1(bottom?.ref ?? '', 'first')?.col !== col) return null;
+  if (bottom?.text !== '') return bottomRow;
+
+  // From an empty cell, Ctrl+Up lands on the nearest cell with data above it,
+  // or on row 1 if the column is empty.
+  if (readNameBox() !== bottom.ref) return null;
+  if (!(await pressNavKey('ArrowUp', { ctrl: true }))) return null;
+  const landed = await readCell();
+  if (parseA1(landed?.ref ?? '', 'first')?.col !== col) return null;
+  // The bottom corner, so that a merge the probe lands on counts as data in full.
+  const corner = parseA1(landed?.ref ?? '', 'last');
+  if (!landed || !corner) return null;
+  return landed.text !== '' ? corner.row : 0;
 }
 
 /**

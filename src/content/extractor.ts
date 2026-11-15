@@ -6,13 +6,14 @@ import { readActiveSheetName, readFileTitle, readToolbarState } from './dom-read
 import {
   type CellPosition,
   columnLetters,
-  currentCell,
   currentSelection,
   goToCell,
   measureUsedRange,
   preservingSelection,
+  setScanSignal,
   pressNavKey,
-  readStableText,
+  parseA1,
+  readCell,
   sleep,
   waitFor,
 } from './navigator';
@@ -71,38 +72,55 @@ async function checkpoint(scan: Scan): Promise<boolean> {
   return false;
 }
 
-/** The active cell, waiting briefly if the name box is momentarily unreadable. */
-async function readPosition(): Promise<CellPosition | null> {
-  await waitFor(() => currentCell() !== null, POSITION_TIMEOUT_MS);
-  return currentCell();
+/** A place the scan can read: `col` is where its value belongs, `right` its last column. */
+interface Stop {
+  col: number;
+  right: number;
 }
 
-/** Records that the merge anchored at `anchor` reaches at least `bottom` / `right`. */
-function noteMerge(
-  scan: Scan,
-  anchor: CellPosition,
-  extent: { bottom?: number; right?: number },
-): MergeRange {
-  const key = `${anchor.row},${anchor.col}`;
-  const merge = scan.merges.get(key) ?? {
-    top: anchor.row,
-    left: anchor.col,
-    bottom: anchor.row,
-    right: anchor.col,
-  };
-  merge.bottom = Math.max(merge.bottom, extent.bottom ?? 0);
-  merge.right = Math.max(merge.right, extent.right ?? 0);
-  scan.merges.set(key, merge);
-  return merge;
+/** What the name box shows, waiting briefly if it is momentarily unreadable. */
+async function readSelection(): Promise<{ first: CellPosition; last: CellPosition } | null> {
+  await waitFor(() => currentSelection() !== null, POSITION_TIMEOUT_MS);
+  return currentSelection();
+}
+
+/**
+ * Works out where the selection landed after a move that aimed at column `col`
+ * (or beyond) of `row`: a stop to read, 'end' if the row has nothing left, or 'lost'
+ * if the selection is somewhere the move could not have put it.
+ *
+ * Sheets shows a merged cell in the name box as its full range ("A4:A6"), no
+ * matter which of its cells was addressed. So a range here is a merge: record it,
+ * and if it starts in an earlier row or column, this row's part of it is covered
+ * and holds no value of its own, so continue just past it.
+ */
+async function settle(scan: Scan, row: number, col: number): Promise<Stop | 'end' | 'lost'> {
+  const selection = await readSelection();
+  if (!selection) return 'lost';
+  const { first, last } = selection;
+
+  if (last.row > first.row || last.col > first.col) {
+    scan.merges.set(`${first.row},${first.col}`, {
+      top: first.row,
+      left: first.col,
+      bottom: last.row,
+      right: last.col,
+    });
+    const coversRow = first.row <= row && row <= last.row;
+    if (!coversRow || last.col < col) return 'lost';
+    if (first.row === row && first.col >= col) return { col: first.col, right: last.col };
+    return (await enterRow(scan, row, last.col + 1)) ?? 'end';
+  }
+
+  if (first.row !== row || first.col < col) return 'lost';
+  return { col: first.col, right: first.col };
 }
 
 /**
  * Moves to (row, col) via the name box, retrying if Sheets does not respond.
- * If the cell is covered by a merge anchored in an earlier row, the name box
- * reports the anchor instead; record the merge and continue just past it.
- * Resolves null when the row has nothing left to visit.
+ * Resolves null when the row has nothing left to visit, or cannot be reached.
  */
-async function enterRow(scan: Scan, row: number, col: number): Promise<CellPosition | null> {
+async function enterRow(scan: Scan, row: number, col: number): Promise<Stop | null> {
   if (col > scan.cols) return null;
 
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
@@ -110,14 +128,10 @@ async function enterRow(scan: Scan, row: number, col: number): Promise<CellPosit
     try {
       await goToCell(a1(row, col));
     } catch {
-      // The name box did not show the cell we asked for; look at where we ended up.
+      continue;
     }
-    const here = await readPosition();
-    if (here?.row === row && here.col >= col) return here;
-    // Covered by a merge from above: its anchor sits in an earlier row, at or left of `col`.
-    if (here && here.row < row && here.col <= col) {
-      return skipMergeFromAbove(scan, here, row, col);
-    }
+    const landing = await settle(scan, row, col);
+    if (landing !== 'lost') return landing === 'end' ? null : landing;
   }
 
   scan.warnings.push(
@@ -126,69 +140,58 @@ async function enterRow(scan: Scan, row: number, col: number): Promise<CellPosit
   return null;
 }
 
-/** The selection landed on `anchor`, a merge from an earlier row that covers (row, col). */
-async function skipMergeFromAbove(
-  scan: Scan,
-  anchor: CellPosition,
-  row: number,
-  col: number,
-): Promise<CellPosition | null> {
-  if (anchor.row > row) return null;
-  const merge = noteMerge(scan, anchor, { bottom: row, right: col });
-  return enterRow(scan, row, Math.max(merge.right, col) + 1);
+/** True if the name box text `ref` is the stop `stop` of `row`. */
+function isAt(ref: string, row: number, stop: Stop): boolean {
+  const first = parseA1(ref, 'first');
+  const last = parseA1(ref, 'last');
+  if (!first || !last) return false;
+  return first.col === stop.col && last.col === stop.right && first.row <= row && row <= last.row;
 }
 
 /** Reads one row left to right, stepping through data and jumping over blanks. */
 async function extractRow(scan: Scan, row: number): Promise<void> {
-  let position = await enterRow(scan, row, 1);
+  let stop = await enterRow(scan, row, 1);
+  let rereads = 0;
 
-  while (position && position.col <= scan.cols) {
+  while (stop && stop.col <= scan.cols) {
     if (await checkpoint(scan)) {
       // The user may have clicked elsewhere while paused; go back to our cell.
-      position = await enterRow(scan, row, position.col);
-      if (!position) return;
+      stop = await enterRow(scan, row, stop.col);
+      if (!stop) return;
     }
-    scan.report(row, position.col);
+    scan.report(row, stop.right);
 
-    // If the name box shows a range for the active cell, that range is the merge.
-    const selection = currentSelection();
-    if (selection) {
-      const { first, last } = selection;
-      if (last.row > first.row || last.col > first.col) {
-        noteMerge(scan, first, { bottom: last.row, right: last.col });
+    // The text only counts if the selection is still on this stop once it is read.
+    // From here to the key press below nothing is awaited, so the press also
+    // starts from the cell that was just read.
+    const cell = await readCell();
+    if (!cell || !isAt(cell.ref, row, stop)) {
+      if (++rereads > MAX_ATTEMPTS) {
+        scan.warnings.push(
+          `Không đọc ổn định được ô ${a1(row, stop.col)}; bỏ qua phần còn lại của hàng ${row}.`,
+        );
+        return;
       }
+      stop = await enterRow(scan, row, stop.col);
+      continue;
     }
+    rereads = 0;
 
-    const value = await readStableText();
+    const value = cell.text;
     if (value !== '') {
-      scan.cells.push({
-        row: row - 1,
-        col: position.col - 1,
-        value,
-        style: readToolbarState(),
-      });
+      scan.cells.push({ row: row - 1, col: stop.col - 1, value, style: readToolbarState() });
     }
-    if (position.col >= scan.cols) return;
+    if (stop.right >= scan.cols) return;
 
     // From an empty cell, Ctrl+Right lands on the next cell with data (or the edge
     // of the sheet), so everything it skips is known to be empty.
-    const stepped = value !== '';
-    const moved = await pressNavKey('ArrowRight', { ctrl: !stepped });
-    const next = moved ? await readPosition() : null;
-
-    if (!next || (next.row === row && next.col <= position.col)) {
-      // The key press was lost: there is always a column to the right of this one.
-      // Fall back to addressing the next cell directly, which cannot overshoot.
-      position = await enterRow(scan, row, position.col + 1);
-    } else if (next.row !== row) {
-      position = await skipMergeFromAbove(scan, next, row, position.col + 1);
-    } else {
-      // A single step that skips columns means the cell we left spans them.
-      if (stepped && next.col > position.col + 1) {
-        noteMerge(scan, position, { right: next.col - 1 });
-      }
-      position = next;
-    }
+    const nextCol = stop.right + 1;
+    const moved = await pressNavKey('ArrowRight', { ctrl: value === '' });
+    // If the key press was lost, or landed somewhere unexpected, address the next
+    // cell directly instead: that cannot overshoot.
+    const landing = moved ? await settle(scan, row, nextCol) : 'lost';
+    if (landing === 'lost') stop = await enterRow(scan, row, nextCol);
+    else stop = landing === 'end' ? null : landing;
   }
 }
 
@@ -198,6 +201,7 @@ async function extractRow(scan: Scan, row: number): Promise<void> {
  */
 export function extractValues(options: ExtractOptions = {}): Promise<SheetModel> {
   const { signal, onProgress } = options;
+  setScanSignal(signal);
   return preservingSelection(async () => {
     signal?.throwIfAborted();
     const { rows, cols } = await measureUsedRange(signal);
@@ -249,5 +253,5 @@ export function extractValues(options: ExtractOptions = {}): Promise<SheetModel>
     console.table(model.merges);
     console.groupEnd();
     return model;
-  });
+  }).finally(() => setScanSignal(undefined));
 }

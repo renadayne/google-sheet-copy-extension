@@ -19,5 +19,7 @@ export type ContentMessage =
   /** Cells processed within the tab last announced by a `sheet` message. */
   | { type: 'progress'; done: number; total: number }
   | { type: 'done'; sheets: SheetModel[] }
+  /** The Sheets tab was hidden or shown; the scan only advances while it is visible. */
+  | { type: 'visibility'; hidden: boolean }
   | { type: 'cancelled' }
   | { type: 'error'; message: string };

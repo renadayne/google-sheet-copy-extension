@@ -121,6 +121,13 @@ async function onContentMessage(
       finish();
       return;
     }
+    case 'visibility':
+      log(
+        message.hidden
+          ? 'Tab Sheets đang bị ẩn nên việc quét tạm ngừng. Hãy đưa tab đó ra trước.'
+          : 'Tab Sheets đã hiển thị lại, tiếp tục quét.',
+      );
+      return;
     case 'cancelled':
       log('Đã hủy.');
       finish();

@@ -14,6 +14,7 @@ import {
   type ExportOptions,
   isFormula,
   stripControlChars,
+  toGrid,
 } from './grid';
 
 const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
@@ -42,6 +43,9 @@ export function cssToArgb(css: string | null): string | null {
 
 /** Formula-bar text -> workbook value: plain numbers become numbers, the rest stays text. */
 function toXlsxValue(text: string, { formulas }: ExportOptions): XlsxValue {
+  // The formula bar shows a leading apostrophe on cells forced to text ("'+ note").
+  // It is a marker, not part of the value.
+  if (text.startsWith("'")) return text.slice(1);
   if (formulas && isFormula(text)) return { formula: text.slice(1) };
   // Leading zeros ("007") are kept as text.
   if (/^-?(0|[1-9]\d*)(\.\d+)?$/.test(text)) return Number(text);
@@ -81,7 +85,93 @@ function worksheetName(name: string | null, taken: Set<string>): string {
   return candidate;
 }
 
+/** Rough width of a string in Excel's column-width units (one unit is about one digit). */
+const textWidth = (text: string) => text.length * 1.15 + 2;
+
+/** Sheets' default column is 100px wide, about 13 of Excel's width units. */
+const DEFAULT_COLUMN_WIDTH = 13;
+const MAX_COLUMN_WIDTH = 60;
+const LINE_HEIGHT_PT = 15;
+const MAX_ROW_HEIGHT_PT = 409;
+
+interface Layout {
+  /** Whether the cell at this 0-based position should wrap its text. */
+  wraps(row: number, col: number): boolean;
+  vertical: 'middle' | 'bottom';
+  /** Column widths in Excel units, by 0-based column. */
+  widths: number[];
+  /** Row heights in points, by 0-based row; undefined leaves the default. */
+  heights: (number | undefined)[];
+}
+
+/**
+ * The scan cannot see column widths, row heights, wrapping or vertical alignment,
+ * so this reconstructs a layout from the content alone, following how Sheets
+ * behaves by default:
+ *
+ * - Text with nothing to its right spills over the empty cells, as in Sheets, so
+ *   it is left unwrapped and does not widen its column.
+ * - Text that is boxed in (a neighbour to the right, a merge, or explicit line
+ *   breaks) wraps, and its column is sized to its longest line, within limits.
+ * - Rows grow to fit wrapped text. Excel does not auto-fit rows that contain
+ *   merged cells, hence explicit heights.
+ * - A sheet with merged cells is taken to be a laid-out table and centred
+ *   vertically; otherwise Sheets' default of bottom alignment is kept.
+ */
+function planLayout(model: SheetModel): Layout {
+  const grid = toGrid(model);
+  const lines = (value: string) => stripControlChars(value).replace(/^'/, '').split('\n');
+  const occupied = (row: number, col: number) =>
+    grid.cellAt(row, col) !== undefined || grid.isCovered(row, col);
+
+  const wrapping = new Set<string>();
+  for (const { row, col, value } of model.cells) {
+    const merge = grid.mergeAt(row, col);
+    const boxedIn = merge !== undefined || value.includes('\n') || occupied(row, col + 1);
+    if (boxedIn) wrapping.add(`${row},${col}`);
+  }
+  const wraps = (row: number, col: number) => wrapping.has(`${row},${col}`);
+
+  const widths = new Array<number>(model.cols).fill(DEFAULT_COLUMN_WIDTH);
+  for (const { row, col, value } of model.cells) {
+    const merge = grid.mergeAt(row, col);
+    // Spilling text needs no room, and a cell spanning several columns says
+    // nothing about any one of them.
+    if (!wraps(row, col) || (merge && merge.right > merge.left)) continue;
+    const longest = Math.max(...lines(value).map(textWidth));
+    widths[col] = Math.min(MAX_COLUMN_WIDTH, Math.max(widths[col] ?? 0, longest));
+  }
+
+  const lineCounts = new Array<number>(model.rows).fill(1);
+  for (const { row, col, value } of model.cells) {
+    if (!wraps(row, col)) continue;
+    const merge = grid.mergeAt(row, col);
+    const right = merge?.right ?? col;
+    const bottom = merge?.bottom ?? row;
+    let available = 0;
+    for (let c = col; c <= right; c++) available += widths[c] ?? DEFAULT_COLUMN_WIDTH;
+    const wrapped = lines(value).reduce(
+      (total, line) => total + Math.max(1, Math.ceil(textWidth(line) / available)),
+      0,
+    );
+    // A cell spanning several rows shares its lines between them.
+    const perRow = Math.ceil(wrapped / (bottom - row + 1));
+    for (let r = row; r <= bottom; r++) lineCounts[r] = Math.max(lineCounts[r] ?? 1, perRow);
+  }
+  const heights = lineCounts.map((count) =>
+    count > 1 ? Math.min(MAX_ROW_HEIGHT_PT, count * LINE_HEIGHT_PT) : undefined,
+  );
+
+  return { wraps, vertical: model.merges.length > 0 ? 'middle' : 'bottom', widths, heights };
+}
+
 function fillWorksheet(sheet: Worksheet, model: SheetModel, options: ExportOptions): void {
+  const layout = planLayout(model);
+  layout.widths.forEach((width, col) => (sheet.getColumn(col + 1).width = width));
+  layout.heights.forEach((height, row) => {
+    if (height !== undefined) sheet.getRow(row + 1).height = height;
+  });
+
   for (const { row, col, value, style } of model.cells) {
     const cell = sheet.getCell(row + 1, col + 1);
     const text = stripControlChars(value);
@@ -96,11 +186,12 @@ function fillWorksheet(sheet: Worksheet, model: SheetModel, options: ExportOptio
       cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: fill } };
     }
 
-    const alignment: Partial<Alignment> = {};
+    const alignment: Partial<Alignment> = {
+      wrapText: layout.wraps(row, col),
+      vertical: layout.vertical,
+    };
     if (style.align) alignment.horizontal = style.align;
-    // Without wrapText, Excel shows a multi-line value on a single line.
-    if (text.includes('\n')) alignment.wrapText = true;
-    if (Object.keys(alignment).length > 0) cell.alignment = alignment;
+    cell.alignment = alignment;
   }
 
   for (const { top, left, bottom, right } of model.merges) {

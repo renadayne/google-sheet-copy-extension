@@ -96,6 +96,11 @@ async function runScan(port: chrome.runtime.Port, allSheets: boolean): Promise<v
     else if (message.type === 'resume') gate.resume();
   });
 
+  // The scan waits for animation frames, which stop while the tab is hidden.
+  const reportVisibility = () => post({ type: 'visibility', hidden: document.hidden });
+  document.addEventListener('visibilitychange', reportVisibility);
+  if (document.hidden) reportVisibility();
+
   let lastPercent = -1;
   const { signal } = controller;
   const onProgress = (done: number, total: number) => {
@@ -123,6 +128,7 @@ async function runScan(port: chrome.runtime.Port, allSheets: boolean): Promise<v
       post({ type: 'error', message: error instanceof Error ? error.message : String(error) });
     }
   } finally {
+    document.removeEventListener('visibilitychange', reportVisibility);
     activeScan = null;
   }
 }
