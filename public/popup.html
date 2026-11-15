@@ -1,27 +1,86 @@
 <!doctype html>
-<html lang="en">
+<html lang="vi">
   <head>
     <meta charset="utf-8" />
     <title>Google Sheet Copy</title>
     <style>
       body {
-        min-width: 240px;
+        width: 320px;
         margin: 0;
         padding: 12px;
         font-family: system-ui, sans-serif;
         font-size: 13px;
+        color: #202124;
       }
-      #status {
-        margin: 8px 0 0;
-        color: #555;
+      .row {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        margin-bottom: 10px;
+      }
+      button,
+      select {
+        font: inherit;
+        padding: 6px 10px;
+        border: 1px solid #c4c7c5;
+        border-radius: 6px;
+        background: #fff;
+      }
+      button:not(:disabled) {
+        cursor: pointer;
+      }
+      button:disabled,
+      select:disabled {
+        opacity: 0.5;
+      }
+      #export {
+        flex: 1;
+        border-color: #0b57d0;
+        background: #0b57d0;
+        color: #fff;
+        font-weight: 600;
+      }
+      progress {
+        flex: 1;
+        height: 10px;
+      }
+      #percent {
+        width: 3.2em;
+        text-align: right;
+        font-variant-numeric: tabular-nums;
+      }
+      #log {
+        height: 120px;
+        margin: 0;
+        padding: 8px;
+        overflow-y: auto;
+        border: 1px solid #e0e0e0;
+        border-radius: 6px;
+        background: #f8f9fa;
+        font:
+          11px/1.5 ui-monospace,
+          Consolas,
+          monospace;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
       }
     </style>
   </head>
   <body>
-    <div id="app">
-      <button id="extract" type="button">Extract values to console</button>
-      <p id="status"></p>
+    <div class="row">
+      <button id="export" type="button">Xuất sheet này</button>
+      <select id="format" aria-label="Định dạng">
+        <option value="xlsx">.xlsx</option>
+        <option value="html">.html</option>
+        <option value="csv">.csv</option>
+      </select>
     </div>
+    <div class="row">
+      <progress id="progress" max="100" value="0"></progress>
+      <span id="percent">0%</span>
+      <button id="cancel" type="button" disabled>Hủy</button>
+    </div>
+    <pre id="log" aria-live="polite"></pre>
     <script src="popup.js"></script>
   </body>
 </html>

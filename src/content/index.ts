@@ -1,50 +1,39 @@
 // Content script — runs on https://docs.google.com/spreadsheets/*
 
-import { readFormulaBar, readNameBox, readToolbarState, SELECTORS } from './dom-reader';
+import { type ContentMessage, EXPORT_PORT, type PopupMessage } from '../shared/messages';
+import {
+  readActiveSheetName,
+  readFileTitle,
+  readFormulaBar,
+  readNameBox,
+  readSheetNames,
+  readToolbarState,
+  SELECTORS,
+} from './dom-reader';
 import { extractValues } from './extractor';
 import { getUsedRange, goToCell, pressCtrlEnd } from './navigator';
 
 const LOG_PREFIX = '[google-sheet-copy]';
 const UI_READY_TIMEOUT_MS = 15_000;
 
-const text = (el: Element | null | undefined): string | null => el?.textContent?.trim() ?? null;
-
-const tabName = (tab: Element): string =>
-  text(tab.querySelector('.docs-sheet-tab-name')) ?? text(tab) ?? '';
-
 /** Diagnostic: logs the Sheets UI elements we rely on, to confirm they are readable. */
 function inspectSheetUi(): void {
-  const titleInput = document.querySelector('.docs-title-input');
-  const tabs = [...document.querySelectorAll('.docs-sheet-tab')];
-  const activeTab = document.querySelector('.docs-sheet-tab.docs-sheet-active-tab');
-
   console.group(`${LOG_PREFIX} UI inspection`);
-  console.log(
-    'File title :',
-    titleInput instanceof HTMLInputElement ? titleInput.value : text(titleInput),
-  );
-  console.log('Active tab :', activeTab ? tabName(activeTab) : null);
-  console.log('All tabs   :', tabs.map(tabName));
+  console.log('File title :', readFileTitle());
+  console.log('Active tab :', readActiveSheetName());
+  console.log('All tabs   :', readSheetNames());
   console.log('Formula bar:', readFormulaBar());
   console.log('Name box   :', readNameBox());
   console.log('Toolbar    :', readToolbarState());
 
-  const missing = Object.entries({
-    '.docs-title-input': titleInput,
-    '.docs-sheet-tab': tabs[0],
-    '.docs-sheet-active-tab': activeTab,
-    [SELECTORS.formulaBar]: document.querySelector(SELECTORS.formulaBar),
-    [SELECTORS.nameBox]: document.querySelector(SELECTORS.nameBox),
-  })
-    .filter(([, el]) => !el)
-    .map(([selector]) => selector);
+  const missing = Object.values(SELECTORS).filter((selector) => !document.querySelector(selector));
   if (missing.length > 0) console.warn('Elements not found:', missing);
   console.groupEnd();
 }
 
 /** Sheets renders its UI after document_idle, so wait for the sheet tabs to appear. */
 function whenSheetUiReady(callback: () => void): void {
-  const isReady = () => document.querySelector('.docs-sheet-tab') !== null;
+  const isReady = () => document.querySelector(SELECTORS.sheetTab) !== null;
   if (isReady()) return callback();
 
   const observer = new MutationObserver(() => {
@@ -78,10 +67,62 @@ Object.assign(globalThis, {
   },
 });
 
-// The popup's button asks for an extraction; the result is printed to this page's console.
-chrome.runtime.onMessage.addListener((message: unknown) => {
-  if ((message as { type?: unknown } | null)?.type !== 'extract-values') return;
-  extractValues().catch((error: unknown) => console.error(LOG_PREFIX, error));
+/** The scan drives the page's single selection, so only one can run at a time. */
+let activeScan: AbortController | null = null;
+
+async function runScan(port: chrome.runtime.Port): Promise<void> {
+  const post = (message: ContentMessage) => {
+    try {
+      port.postMessage(message);
+    } catch {
+      // The popup closed; its onDisconnect handler aborts the scan.
+    }
+  };
+
+  if (activeScan) {
+    post({ type: 'error', message: 'Đang có một lượt quét khác chạy trên trang này.' });
+    return;
+  }
+  const controller = new AbortController();
+  activeScan = controller;
+  port.onDisconnect.addListener(() => controller.abort());
+  port.onMessage.addListener((message: PopupMessage) => {
+    if (message.type === 'cancel') controller.abort();
+  });
+
+  let lastPercent = -1;
+  try {
+    const model = await extractValues({
+      signal: controller.signal,
+      onProgress: (done, total) => {
+        // One message per percentage point is plenty for a progress bar.
+        const percent = total > 0 ? Math.floor((done / total) * 100) : 100;
+        if (percent === lastPercent) return;
+        lastPercent = percent;
+        post({ type: 'progress', done, total });
+      },
+    });
+    post({ type: 'done', model });
+  } catch (error) {
+    if (controller.signal.aborted) {
+      post({ type: 'cancelled' });
+    } else {
+      console.error(LOG_PREFIX, error);
+      post({ type: 'error', message: error instanceof Error ? error.message : String(error) });
+    }
+  } finally {
+    activeScan = null;
+  }
+}
+
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name !== EXPORT_PORT) return;
+  const onStart = (message: PopupMessage) => {
+    if (message.type !== 'start') return;
+    port.onMessage.removeListener(onStart);
+    void runScan(port);
+  };
+  port.onMessage.addListener(onStart);
 });
 
 whenSheetUiReady(inspectSheetUi);
