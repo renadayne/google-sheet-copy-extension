@@ -1,0 +1,18 @@
+{
+  "manifest_version": 3,
+  "name": "Google Sheet Copy",
+  "version": "0.1.0",
+  "description": "Copy data from Google Sheets.",
+  "permissions": ["activeTab", "scripting", "clipboardWrite", "downloads"],
+  "action": {
+    "default_title": "Google Sheet Copy",
+    "default_popup": "popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://docs.google.com/spreadsheets/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}
