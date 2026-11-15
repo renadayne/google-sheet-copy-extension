@@ -1,23 +1,38 @@
 // Read-only access to the Google Sheets UI. Nothing here changes the page.
 
-export type HorizontalAlign = 'left' | 'center' | 'right';
+import type { CellStyle, HorizontalAlign } from '../shared/model';
 
 /** Every field is null when its toolbar element (or the value inside it) cannot be found. */
-export interface ToolbarState {
-  fontFamily: string | null;
-  fontSize: string | null;
-  bold: boolean | null;
-  italic: boolean | null;
-  underline: boolean | null;
-  align: HorizontalAlign | null;
-  textColor: string | null;
-  fillColor: string | null;
-}
+export type ToolbarState = CellStyle;
 
 export const SELECTORS = {
   formulaBar: '#t-formula-bar-input',
   nameBox: '#t-name-box',
+  fileTitle: '.docs-title-input',
+  sheetTab: '.docs-sheet-tab',
+  activeSheetTab: '.docs-sheet-tab.docs-sheet-active-tab',
 } as const;
+
+const sheetTabName = (tab: Element): string =>
+  (tab.querySelector('.docs-sheet-tab-name') ?? tab).textContent?.trim() ?? '';
+
+/** Title of the spreadsheet file. */
+export function readFileTitle(): string | null {
+  const el = document.querySelector(SELECTORS.fileTitle);
+  if (el instanceof HTMLInputElement) return el.value;
+  return el?.textContent?.trim() ?? null;
+}
+
+/** Name of the sheet tab that is currently open. */
+export function readActiveSheetName(): string | null {
+  const tab = document.querySelector(SELECTORS.activeSheetTab);
+  return tab ? sheetTabName(tab) : null;
+}
+
+/** Names of all sheet tabs in the bottom bar. */
+export function readSheetNames(): string[] {
+  return [...document.querySelectorAll(SELECTORS.sheetTab)].map(sheetTabName);
+}
 
 // Candidate selectors per control, first match wins. Sheets has renamed these over time.
 const TOOLBAR = {

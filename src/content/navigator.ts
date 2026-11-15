@@ -81,9 +81,26 @@ export function parseA1(ref: string, corner: 'first' | 'last' = 'last'): CellPos
   return { row: Number(match[2]), col: columnToIndex(match[1]) };
 }
 
+/** Converts a 1-based column index to letters: 1 -> A, 27 -> AA. */
+export function columnLetters(index: number): string {
+  let letters = '';
+  for (let n = index; n > 0; n = Math.floor((n - 1) / 26)) {
+    letters = String.fromCharCode(65 + ((n - 1) % 26)) + letters;
+  }
+  return letters;
+}
+
 /** Position of the active cell, read from the name box. */
 export function currentCell(): CellPosition | null {
   return parseA1(readNameBox() ?? '', 'first');
+}
+
+/** Both corners of what the name box shows; they are equal for a single cell. */
+export function currentSelection(): { first: CellPosition; last: CellPosition } | null {
+  const ref = readNameBox() ?? '';
+  const first = parseA1(ref, 'first');
+  const last = parseA1(ref, 'last');
+  return first && last ? { first, last } : null;
 }
 
 /** Moves the selection to `a1` by typing it into the name box and pressing Enter. */
@@ -98,11 +115,14 @@ export async function goToCell(a1: string): Promise<void> {
   dispatchKey(nameBox, 'Enter');
 
   // Sheets hands focus back to the grid once it has accepted the reference.
-  const target = normalizeRef(a1);
-  const moved = await waitFor(
-    () => document.activeElement !== nameBox && normalizeRef(nameBox.value) === target,
-    GO_TO_TIMEOUT_MS,
-  );
+  // A merged cell may be reported as a range ("A1:B2"), so compare its first corner.
+  const target = parseA1(a1, 'first');
+  const moved = await waitFor(() => {
+    if (document.activeElement === nameBox) return false;
+    if (normalizeRef(nameBox.value) === normalizeRef(a1)) return true;
+    const here = parseA1(nameBox.value, 'first');
+    return !!target && here?.row === target.row && here.col === target.col;
+  }, GO_TO_TIMEOUT_MS);
   if (!moved) throw new Error(`Could not navigate to ${a1}`);
   // Let Sheets finish updating the formula bar and toolbar for the new cell.
   await sleep(0);
