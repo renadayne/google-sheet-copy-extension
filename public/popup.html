@@ -40,6 +40,18 @@
         color: #fff;
         font-weight: 600;
       }
+      .option {
+        display: flex;
+        gap: 6px;
+        align-items: center;
+        margin-bottom: 6px;
+      }
+      .row + .option {
+        margin-top: -2px;
+      }
+      label + .row {
+        margin-top: 10px;
+      }
       progress {
         flex: 1;
         height: 10px;
@@ -75,6 +87,14 @@
         <option value="csv">.csv</option>
       </select>
     </div>
+    <label class="option">
+      <input id="formulas" type="checkbox" checked />
+      Xuất công thức thay vì giá trị
+    </label>
+    <label class="option">
+      <input id="all-sheets" type="checkbox" />
+      Tất cả các tab
+    </label>
     <div class="row">
       <progress id="progress" max="100" value="0"></progress>
       <span id="percent">0%</span>

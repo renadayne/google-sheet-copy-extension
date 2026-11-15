@@ -12,6 +12,7 @@ import {
 } from './dom-reader';
 import { extractValues } from './extractor';
 import { getUsedRange, goToCell, pressCtrlEnd } from './navigator';
+import { extractAllSheets } from './sheet-tabs';
 
 const LOG_PREFIX = '[google-sheet-copy]';
 const UI_READY_TIMEOUT_MS = 15_000;
@@ -64,13 +65,14 @@ Object.assign(globalThis, {
     pressCtrlEnd,
     getUsedRange,
     extractValues,
+    extractAllSheets,
   },
 });
 
 /** The scan drives the page's single selection, so only one can run at a time. */
 let activeScan: AbortController | null = null;
 
-async function runScan(port: chrome.runtime.Port): Promise<void> {
+async function runScan(port: chrome.runtime.Port, allSheets: boolean): Promise<void> {
   const post = (message: ContentMessage) => {
     try {
       port.postMessage(message);
@@ -91,18 +93,24 @@ async function runScan(port: chrome.runtime.Port): Promise<void> {
   });
 
   let lastPercent = -1;
+  const { signal } = controller;
+  const onProgress = (done: number, total: number) => {
+    // One message per percentage point is plenty for a progress bar.
+    const percent = total > 0 ? Math.floor((done / total) * 100) : 100;
+    if (percent === lastPercent) return;
+    lastPercent = percent;
+    post({ type: 'progress', done, total });
+  };
+  const onSheet = (name: string, index: number, count: number) => {
+    lastPercent = -1;
+    post({ type: 'sheet', name, index, count });
+  };
+
   try {
-    const model = await extractValues({
-      signal: controller.signal,
-      onProgress: (done, total) => {
-        // One message per percentage point is plenty for a progress bar.
-        const percent = total > 0 ? Math.floor((done / total) * 100) : 100;
-        if (percent === lastPercent) return;
-        lastPercent = percent;
-        post({ type: 'progress', done, total });
-      },
-    });
-    post({ type: 'done', model });
+    const sheets = allSheets
+      ? await extractAllSheets({ signal, onProgress, onSheet })
+      : [await extractValues({ signal, onProgress })];
+    post({ type: 'done', sheets });
   } catch (error) {
     if (controller.signal.aborted) {
       post({ type: 'cancelled' });
@@ -120,7 +128,7 @@ chrome.runtime.onConnect.addListener((port) => {
   const onStart = (message: PopupMessage) => {
     if (message.type !== 'start') return;
     port.onMessage.removeListener(onStart);
-    void runScan(port);
+    void runScan(port, message.allSheets);
   };
   port.onMessage.addListener(onStart);
 });

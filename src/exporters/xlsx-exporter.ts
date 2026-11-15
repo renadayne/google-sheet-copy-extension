@@ -1,8 +1,20 @@
-// Writes a SheetModel to an .xlsx workbook with ExcelJS.
+// Writes one or more SheetModels to an .xlsx workbook with ExcelJS.
 
-import { type Alignment, type CellValue as XlsxValue, type Font, Workbook } from 'exceljs';
+import {
+  type Alignment,
+  type CellValue as XlsxValue,
+  type Font,
+  Workbook,
+  type Worksheet,
+} from 'exceljs';
 import type { CellStyle, SheetModel } from '../shared/model';
-import { downloadBlob, exportFileName } from './grid';
+import {
+  downloadBlob,
+  exportFileName,
+  type ExportOptions,
+  isFormula,
+  stripControlChars,
+} from './grid';
 
 const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 const WHITE = 'FFFFFFFF';
@@ -28,9 +40,9 @@ export function cssToArgb(css: string | null): string | null {
   return null;
 }
 
-/** Formula-bar text -> workbook value: formulas stay formulas, plain numbers become numbers. */
-function toXlsxValue(text: string): XlsxValue {
-  if (text.startsWith('=') && text.length > 1) return { formula: text.slice(1) };
+/** Formula-bar text -> workbook value: plain numbers become numbers, the rest stays text. */
+function toXlsxValue(text: string, { formulas }: ExportOptions): XlsxValue {
+  if (formulas && isFormula(text)) return { formula: text.slice(1) };
   // Leading zeros ("007") are kept as text.
   if (/^-?(0|[1-9]\d*)(\.\d+)?$/.test(text)) return Number(text);
   return text;
@@ -49,21 +61,31 @@ function toFont(style: CellStyle): Partial<Font> {
   return font;
 }
 
-/** Sheet names in xlsx are limited to 31 characters and may not contain []:*?/\ */
-const worksheetName = (name: string | null) =>
-  (name ?? '')
-    .replace(/[[\]:*?/\\]/g, '_')
-    .replace(/^'+|'+$/g, '')
-    .slice(0, 31)
-    .trim() || 'Sheet1';
+/**
+ * Sheet names in xlsx are limited to 31 characters, may not contain []:*?/\ and must
+ * be unique ignoring case. `taken` holds the lower-cased names already used.
+ */
+function worksheetName(name: string | null, taken: Set<string>): string {
+  const base =
+    (name ?? '')
+      .replace(/[[\]:*?/\\\p{Cc}]/gu, '_')
+      .replace(/^'+|'+$/g, '')
+      .slice(0, 31)
+      .trim() || 'Sheet';
+  let candidate = base;
+  for (let n = 2; taken.has(candidate.toLowerCase()); n++) {
+    const suffix = ` (${n})`;
+    candidate = base.slice(0, 31 - suffix.length) + suffix;
+  }
+  taken.add(candidate.toLowerCase());
+  return candidate;
+}
 
-export async function buildXlsx(model: SheetModel): Promise<Blob> {
-  const workbook = new Workbook();
-  const sheet = workbook.addWorksheet(worksheetName(model.sheetName));
-
+function fillWorksheet(sheet: Worksheet, model: SheetModel, options: ExportOptions): void {
   for (const { row, col, value, style } of model.cells) {
     const cell = sheet.getCell(row + 1, col + 1);
-    cell.value = toXlsxValue(value);
+    const text = stripControlChars(value);
+    cell.value = toXlsxValue(text, options);
 
     const font = toFont(style);
     if (Object.keys(font).length > 0) cell.font = font;
@@ -74,10 +96,11 @@ export async function buildXlsx(model: SheetModel): Promise<Blob> {
       cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: fill } };
     }
 
-    if (style.align) {
-      const alignment: Partial<Alignment> = { horizontal: style.align };
-      cell.alignment = alignment;
-    }
+    const alignment: Partial<Alignment> = {};
+    if (style.align) alignment.horizontal = style.align;
+    // Without wrapText, Excel shows a multi-line value on a single line.
+    if (text.includes('\n')) alignment.wrapText = true;
+    if (Object.keys(alignment).length > 0) cell.alignment = alignment;
   }
 
   for (const { top, left, bottom, right } of model.merges) {
@@ -88,14 +111,28 @@ export async function buildXlsx(model: SheetModel): Promise<Blob> {
       console.warn('[google-sheet-copy] skipped merge', { top, left, bottom, right }, error);
     }
   }
+}
 
+/** Builds a workbook with one worksheet per SheetModel, in order. */
+export async function buildXlsx(sheets: SheetModel[], options: ExportOptions): Promise<Blob> {
+  const workbook = new Workbook();
+  const taken = new Set<string>();
+  for (const model of sheets) {
+    fillWorksheet(workbook.addWorksheet(worksheetName(model.sheetName, taken)), model, options);
+  }
   const buffer = await workbook.xlsx.writeBuffer();
   return new Blob([buffer], { type: XLSX_MIME });
 }
 
 /** Builds the workbook and saves it through chrome.downloads. Returns the file name. */
-export async function exportXlsx(model: SheetModel): Promise<string> {
-  const filename = exportFileName(model, 'xlsx');
-  await downloadBlob(await buildXlsx(model), filename);
+export async function exportXlsx(sheets: SheetModel[], options: ExportOptions): Promise<string> {
+  const [first] = sheets;
+  // A single sheet is named after its tab; a multi-sheet workbook after the file only.
+  const filename = exportFileName(
+    first?.title ?? null,
+    sheets.length === 1 ? (first?.sheetName ?? null) : null,
+    'xlsx',
+  );
+  await downloadBlob(await buildXlsx(sheets, options), filename);
   return filename;
 }

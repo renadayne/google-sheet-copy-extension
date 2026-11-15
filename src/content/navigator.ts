@@ -29,10 +29,10 @@ const GO_TO_TIMEOUT_MS = 2_000;
 const MOVE_TIMEOUT_MS = 400;
 const POLL_INTERVAL_MS = 5;
 
-const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+export const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 /** Polls until `predicate` is true; resolves false if it never is within the timeout. */
-async function waitFor(predicate: () => boolean, timeoutMs: number): Promise<boolean> {
+export async function waitFor(predicate: () => boolean, timeoutMs: number): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (predicate()) return true;

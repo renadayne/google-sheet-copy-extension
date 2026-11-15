@@ -1,4 +1,4 @@
-// Helpers shared by the exporters for laying a sparse SheetModel out as a grid.
+// Helpers shared by the exporters: grid layout, text handling, file names, downloads.
 
 import type { CellValue, MergeRange, SheetModel } from '../shared/model';
 
@@ -31,9 +31,38 @@ export function toGrid(model: SheetModel): Grid {
   };
 }
 
-/** File name built from the spreadsheet title and sheet name, safe for Windows and macOS. */
-export function exportFileName(model: SheetModel, extension: string): string {
-  const base = [model.title, model.sheetName]
+export interface ExportOptions {
+  /**
+   * true: cells holding a formula are exported as live formulas.
+   * false: the formula's text is exported as plain text, so it is not evaluated.
+   */
+  formulas: boolean;
+}
+
+export const isFormula = (value: string) => value.startsWith('=') && value.length > 1;
+
+/**
+ * Removes control characters other than tab and line breaks. XML 1.0 does not
+ * allow them, so they would corrupt an xlsx file.
+ */
+export const stripControlChars = (value: string) =>
+  value.replace(/\p{Cc}/gu, (char) => (/[\t\n\r]/.test(char) ? char : ''));
+
+/**
+ * Cell text for the text-based formats (HTML, CSV). A leading apostrophe is the
+ * spreadsheet convention for "treat this as text", which stops a formula from running.
+ */
+export function cellText(value: string, { formulas }: ExportOptions): string {
+  return !formulas && isFormula(value) ? `'${value}` : value;
+}
+
+/** File name from the file title and (optionally) a sheet name, safe for Windows and macOS. */
+export function exportFileName(
+  title: string | null,
+  sheetName: string | null,
+  extension: string,
+): string {
+  const base = [title, sheetName]
     .map((part) => part?.trim())
     .filter(Boolean)
     .join(' - ');
