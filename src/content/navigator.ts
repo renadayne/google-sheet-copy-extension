@@ -104,6 +104,8 @@ export async function goToCell(a1: string): Promise<void> {
     GO_TO_TIMEOUT_MS,
   );
   if (!moved) throw new Error(`Could not navigate to ${a1}`);
+  // Let Sheets finish updating the formula bar and toolbar for the new cell.
+  await sleep(0);
 }
 
 /**

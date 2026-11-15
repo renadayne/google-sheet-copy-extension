@@ -4,7 +4,7 @@ export type HorizontalAlign = 'left' | 'center' | 'right';
 
 /** Every field is null when its toolbar element (or the value inside it) cannot be found. */
 export interface ToolbarState {
-  font: string | null;
+  fontFamily: string | null;
   fontSize: string | null;
   bold: boolean | null;
   italic: boolean | null;
@@ -21,7 +21,7 @@ export const SELECTORS = {
 
 // Candidate selectors per control, first match wins. Sheets has renamed these over time.
 const TOOLBAR = {
-  font: ['#t-font-family', '#docs-font-family'],
+  fontFamily: ['#t-font-family', '#docs-font-family'],
   fontSize: ['#t-font-size', '#docs-font-size', '.docs-font-size-inc-dec-combobox'],
   bold: ['#t-bold'],
   italic: ['#t-italic'],
@@ -105,7 +105,7 @@ function readColor(el: HTMLElement | null): string | null {
 /** Formatting of the active cell, as reflected by the toolbar buttons. */
 export function readToolbarState(): ToolbarState {
   return {
-    font: readCaption(first(TOOLBAR.font)),
+    fontFamily: readCaption(first(TOOLBAR.fontFamily)),
     fontSize: readCaption(first(TOOLBAR.fontSize)),
     bold: readToggle(first(TOOLBAR.bold)),
     italic: readToggle(first(TOOLBAR.italic)),

@@ -1,6 +1,6 @@
 // Walks the data area of the active sheet and collects every cell's content.
 
-import { readFormulaBar } from './dom-reader';
+import { readFormulaBar, readToolbarState, type ToolbarState } from './dom-reader';
 import {
   currentCell,
   goToCell,
@@ -14,6 +14,8 @@ export interface CellValue {
   row: number;
   col: number;
   value: string;
+  /** Formatting shown by the toolbar while the cell was selected. */
+  style: ToolbarState;
 }
 
 /** `cells` is sparse: empty cells are left out. */
@@ -35,7 +37,9 @@ async function extractRow(row: number, cols: number, cells: CellValue[]): Promis
 
   while (position.col <= cols) {
     const value = readFormulaBar() ?? '';
-    if (value !== '') cells.push({ row: row - 1, col: position.col - 1, value });
+    if (value !== '') {
+      cells.push({ row: row - 1, col: position.col - 1, value, style: readToolbarState() });
+    }
     if (position.col === cols) return;
 
     // From an empty cell, Ctrl+Right lands on the next cell with data (or the edge
