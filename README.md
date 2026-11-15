@@ -85,7 +85,9 @@ quay lại đúng tab và ô đang dở. Khi xong hoặc hủy, con trỏ đư�
 - Tốc độ khoảng vài mili giây đến vài chục mili giây mỗi ô có dữ liệu. Sheet hàng chục nghìn ô
   sẽ mất nhiều phút.
 - Không dùng sheet trong lúc quét (trừ khi đã tạm dừng): extension điều khiển con trỏ của trang.
-- Vùng quét là từ A1 đến ô mà Ctrl+End dừng lại.
+- Vùng quét bắt đầu từ A1. Số cột lấy từ ô mà Ctrl+End dừng lại; số hàng được thu hẹp về hàng
+  cuối có dữ liệu bằng cách dò Ctrl+↑ ở từng cột, nên sheet có rất nhiều cột sẽ mất thêm thời
+  gian dò trước khi quét.
 - Tab ẩn bị bỏ qua. Hàng, cột ẩn và bộ lọc đang bật có thể làm lệch kết quả.
 - Extension phụ thuộc vào cấu trúc DOM của Google Sheets (`#t-name-box`,
   `#t-formula-bar-input`, các nút `#t-bold`, `#t-text-color`...). Google đổi giao diện thì

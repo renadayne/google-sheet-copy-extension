@@ -2,7 +2,7 @@
 // formatting and merged ranges.
 
 import type { CellValue, MergeRange, SheetModel } from '../shared/model';
-import { readActiveSheetName, readFileTitle, readFormulaBar, readToolbarState } from './dom-reader';
+import { readActiveSheetName, readFileTitle, readToolbarState } from './dom-reader';
 import {
   type CellPosition,
   columnLetters,
@@ -12,6 +12,7 @@ import {
   measureUsedRange,
   preservingSelection,
   pressNavKey,
+  readStableText,
   sleep,
   waitFor,
 } from './navigator';
@@ -68,21 +69,6 @@ async function checkpoint(scan: Scan): Promise<boolean> {
     await sleep(BATCH_PAUSE_MS);
   }
   return false;
-}
-
-/**
- * Reads the formula bar until two consecutive reads agree, since it can lag a
- * moment behind the name box after the selection moves.
- */
-async function readCellText(): Promise<string> {
-  let value = readFormulaBar() ?? '';
-  for (let attempt = 1; attempt < MAX_ATTEMPTS; attempt++) {
-    await sleep(0);
-    const again = readFormulaBar() ?? '';
-    if (again === value) break;
-    value = again;
-  }
-  return value;
 }
 
 /** The active cell, waiting briefly if the name box is momentarily unreadable. */
@@ -173,7 +159,7 @@ async function extractRow(scan: Scan, row: number): Promise<void> {
       }
     }
 
-    const value = await readCellText();
+    const value = await readStableText();
     if (value !== '') {
       scan.cells.push({
         row: row - 1,
@@ -214,7 +200,7 @@ export function extractValues(options: ExtractOptions = {}): Promise<SheetModel>
   const { signal, onProgress } = options;
   return preservingSelection(async () => {
     signal?.throwIfAborted();
-    const { rows, cols } = await measureUsedRange();
+    const { rows, cols } = await measureUsedRange(signal);
     const total = rows * cols;
     const scan: Scan = {
       cols,
@@ -241,16 +227,23 @@ export function extractValues(options: ExtractOptions = {}): Promise<SheetModel>
         right: Math.min(right, cols) - 1,
       }));
 
+    // Ctrl+End often reports the edge of the grid; trim to the columns actually used.
+    const usedCols = Math.max(
+      1,
+      ...scan.cells.map((cell) => cell.col + 1),
+      ...merges.map((merge) => merge.right + 1),
+    );
+
     const model: SheetModel = {
       title: readFileTitle(),
       sheetName: readActiveSheetName(),
       rows,
-      cols,
+      cols: usedCols,
       cells: scan.cells,
       merges,
       warnings: scan.warnings,
     };
-    console.group(`[google-sheet-copy] SheetModel: ${rows} rows x ${cols} cols`);
+    console.group(`[google-sheet-copy] SheetModel: ${rows} rows x ${usedCols} cols`);
     console.log(model);
     console.table(model.cells.map(({ row, col, value }) => ({ row, col, value })));
     console.table(model.merges);

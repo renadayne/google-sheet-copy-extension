@@ -1,6 +1,6 @@
 // Moves the selection in Google Sheets by simulating keyboard input.
 
-import { getNameBox, readNameBox } from './dom-reader';
+import { getNameBox, readFormulaBar, readNameBox } from './dom-reader';
 
 export interface UsedRange {
   rows: number;
@@ -27,6 +27,8 @@ const KEY_CODES: Record<NavKey | 'Enter', number> = {
 
 const GO_TO_TIMEOUT_MS = 2_000;
 const MOVE_TIMEOUT_MS = 400;
+/** Reads of the formula bar before accepting its text as settled. */
+const READ_ATTEMPTS = 3;
 const POLL_INTERVAL_MS = 5;
 
 export const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
@@ -147,14 +149,72 @@ export async function pressCtrlEnd(): Promise<void> {
   await pressNavKey('End', { ctrl: true });
 }
 
-/** Finds the size of the data area, leaving the selection on its last cell. */
-export async function measureUsedRange(): Promise<UsedRange> {
+/**
+ * Reads the formula bar until two consecutive reads agree, since it can lag a
+ * moment behind the name box after the selection moves.
+ */
+export async function readStableText(): Promise<string> {
+  let value = readFormulaBar() ?? '';
+  for (let attempt = 1; attempt < READ_ATTEMPTS; attempt++) {
+    await sleep(0);
+    const again = readFormulaBar() ?? '';
+    if (again === value) break;
+    value = again;
+  }
+  return value;
+}
+
+/**
+ * Last row that holds data in any of the first `cols` columns, probing each column
+ * from `bottomRow` with Ctrl+Up. Falls back to `bottomRow` if a probe cannot be
+ * trusted, so data is never cut off.
+ */
+async function findLastDataRow(
+  bottomRow: number,
+  cols: number,
+  signal?: AbortSignal,
+): Promise<number> {
+  if (bottomRow <= 1) return bottomRow;
+  let lastRow = 1;
+
+  for (let col = 1; col <= cols; col++) {
+    signal?.throwIfAborted();
+    try {
+      await goToCell(`${columnLetters(col)}${bottomRow}`);
+    } catch {
+      // Not reachable, e.g. covered by a merge that another column's probe will find.
+      continue;
+    }
+    // Data in the bottom row itself: nothing to trim.
+    if ((await readStableText()) !== '') return bottomRow;
+
+    // From an empty cell, Ctrl+Up lands on the nearest cell with data above it,
+    // or on row 1 if the column is empty.
+    const moved =
+      (await pressNavKey('ArrowUp', { ctrl: true })) ||
+      (await pressNavKey('ArrowUp', { ctrl: true }));
+    const landed = currentCell();
+    if (!moved || !landed) return bottomRow;
+
+    // The landing cell may be the top of a merge; count the whole merge as data.
+    const reach = parseA1(readNameBox() ?? '', 'last')?.row ?? landed.row;
+    if ((await readStableText()) !== '') lastRow = Math.max(lastRow, reach);
+  }
+  return lastRow;
+}
+
+/**
+ * Finds the size of the data area. Ctrl+End gives the bottom-right cell Sheets
+ * considers in use, which is often the edge of the grid (e.g. row 1000) even when
+ * only a few rows hold data, so the row count is then narrowed column by column.
+ */
+export async function measureUsedRange(signal?: AbortSignal): Promise<UsedRange> {
   // Start from A1 so the result does not depend on where the selection was.
   await goToCell('A1');
   await pressCtrlEnd();
   const last = parseA1(readNameBox() ?? '', 'last');
   if (!last) throw new Error('Could not read the last cell from the name box');
-  return { rows: last.row, cols: last.col };
+  return { rows: await findLastDataRow(last.row, last.col, signal), cols: last.col };
 }
 
 /** Runs `action`, then puts the selection back where it was. */
@@ -168,9 +228,8 @@ export async function preservingSelection<T>(action: () => Promise<T>): Promise<
 }
 
 /**
- * Number of rows and columns that hold data, measured from A1 to the cell
- * Ctrl+End lands on. Moves the selection to find out, then restores it.
+ * Number of rows and columns of the data area, starting at A1. Moves the selection to find out, then restores it.
  */
 export function getUsedRange(): Promise<UsedRange> {
-  return preservingSelection(measureUsedRange);
+  return preservingSelection(() => measureUsedRange());
 }
