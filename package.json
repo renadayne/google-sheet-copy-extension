@@ -1,6 +1,6 @@
 {
   "name": "google-sheet-copy-extension",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "private": true,
   "description": "Chrome extension (Manifest V3) for copying data from Google Sheets",
   "type": "module",
