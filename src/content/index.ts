@@ -12,6 +12,7 @@ import {
 } from './dom-reader';
 import { extractValues } from './extractor';
 import { getUsedRange, goToCell, pressCtrlEnd } from './navigator';
+import { PauseGate } from './pause-gate';
 import { extractAllSheets } from './sheet-tabs';
 
 const LOG_PREFIX = '[google-sheet-copy]';
@@ -88,8 +89,11 @@ async function runScan(port: chrome.runtime.Port, allSheets: boolean): Promise<v
   const controller = new AbortController();
   activeScan = controller;
   port.onDisconnect.addListener(() => controller.abort());
+  const gate = new PauseGate();
   port.onMessage.addListener((message: PopupMessage) => {
     if (message.type === 'cancel') controller.abort();
+    else if (message.type === 'pause') gate.pause();
+    else if (message.type === 'resume') gate.resume();
   });
 
   let lastPercent = -1;
@@ -108,8 +112,8 @@ async function runScan(port: chrome.runtime.Port, allSheets: boolean): Promise<v
 
   try {
     const sheets = allSheets
-      ? await extractAllSheets({ signal, onProgress, onSheet })
-      : [await extractValues({ signal, onProgress })];
+      ? await extractAllSheets({ signal, gate, onProgress, onSheet })
+      : [await extractValues({ signal, gate, onProgress })];
     post({ type: 'done', sheets });
   } catch (error) {
     if (controller.signal.aborted) {

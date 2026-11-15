@@ -53,7 +53,8 @@ export const stripControlChars = (value: string) =>
  * spreadsheet convention for "treat this as text", which stops a formula from running.
  */
 export function cellText(value: string, { formulas }: ExportOptions): string {
-  return !formulas && isFormula(value) ? `'${value}` : value;
+  const text = stripControlChars(value);
+  return !formulas && isFormula(text) ? `'${text}` : text;
 }
 
 /** File name from the file title and (optionally) a sheet name, safe for Windows and macOS. */

@@ -4,6 +4,7 @@ import type { SheetModel } from '../shared/model';
 import { readNameBox, SELECTORS } from './dom-reader';
 import { type ExtractOptions, extractValues } from './extractor';
 import { sleep, waitFor } from './navigator';
+import type { PauseGate } from './pause-gate';
 
 const TAB_SWITCH_TIMEOUT_MS = 5_000;
 const TAB_SETTLE_MS = 300;
@@ -11,6 +12,7 @@ const ACTIVE_TAB_CLASS = 'docs-sheet-active-tab';
 
 export interface ExtractAllOptions {
   signal?: AbortSignal;
+  gate?: PauseGate;
   /** Called when the scan of a tab starts. `index` is 0-based. */
   onSheet?: (name: string, index: number, count: number) => void;
   /** Progress within the tab that `onSheet` last announced. */
@@ -48,6 +50,7 @@ export async function activateSheetTab(tab: HTMLElement): Promise<void> {
 /** Scans every visible tab in order, then returns to the tab that was open. */
 export async function extractAllSheets({
   signal,
+  gate,
   onSheet,
   onProgress,
 }: ExtractAllOptions = {}): Promise<SheetModel[]> {
@@ -61,7 +64,9 @@ export async function extractAllSheets({
       signal?.throwIfAborted();
       onSheet?.(tabName(tab), index, tabs.length);
       await activateSheetTab(tab);
-      sheets.push(await extractValues({ signal, onProgress }));
+      // After a pause the user may be looking at another tab; reopen this one first.
+      const beforeResume = () => activateSheetTab(tab);
+      sheets.push(await extractValues({ signal, gate, beforeResume, onProgress }));
     }
   } finally {
     if (original?.isConnected) await activateSheetTab(original).catch(() => undefined);

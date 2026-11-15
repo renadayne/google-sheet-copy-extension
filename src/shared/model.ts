@@ -39,4 +39,6 @@ export interface SheetModel {
   /** Sparse: empty cells are left out. */
   cells: CellValue[];
   merges: MergeRange[];
+  /** Problems met during the scan, e.g. part of a row that could not be reached. */
+  warnings: string[];
 }

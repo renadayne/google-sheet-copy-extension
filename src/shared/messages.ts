@@ -8,7 +8,10 @@ export type ExportFormat = 'xlsx' | 'html' | 'csv';
 
 export type PopupMessage =
   /** `allSheets` scans every tab instead of only the one that is open. */
-  { type: 'start'; allSheets: boolean } | { type: 'cancel' };
+  | { type: 'start'; allSheets: boolean }
+  | { type: 'pause' }
+  | { type: 'resume' }
+  | { type: 'cancel' };
 
 export type ContentMessage =
   /** A tab's scan is starting. `index` is 0-based. */

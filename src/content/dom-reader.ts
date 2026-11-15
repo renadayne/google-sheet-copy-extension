@@ -64,10 +64,34 @@ export function getNameBox(): HTMLInputElement | null {
   return el instanceof HTMLInputElement ? el : null;
 }
 
+/**
+ * Text of an editable region with its line breaks kept. textContent would drop
+ * them, because a multi-line value is rendered with <br> or one block per line.
+ */
+function textWithLineBreaks(root: Node): string {
+  let text = '';
+  const visit = (node: Node): void => {
+    if (node.nodeType === Node.TEXT_NODE) {
+      text += node.nodeValue ?? '';
+    } else if (node instanceof HTMLBRElement) {
+      text += '\n';
+    } else {
+      const isBlock =
+        node !== root && node instanceof HTMLElement && /^(DIV|P)$/.test(node.tagName);
+      if (isBlock && text !== '' && !text.endsWith('\n')) text += '\n';
+      node.childNodes.forEach(visit);
+    }
+  };
+  visit(root);
+  // Editable regions use non-breaking spaces to keep runs of spaces visible, and
+  // end with a placeholder <br>.
+  return text.replace(/\u00a0/g, ' ').replace(/\n$/, '');
+}
+
 /** Text shown in the formula bar: the formula or raw value of the active cell. */
 export function readFormulaBar(): string | null {
   const el = document.querySelector(SELECTORS.formulaBar);
-  return el ? (el.textContent ?? '') : null;
+  return el ? textWithLineBreaks(el) : null;
 }
 
 /** Text shown in the name box: usually the A1 reference of the current selection. */

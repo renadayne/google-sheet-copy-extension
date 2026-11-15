@@ -20,6 +20,7 @@ function element<T extends HTMLElement>(id: string): T {
 }
 
 const exportButton = element<HTMLButtonElement>('export');
+const pauseButton = element<HTMLButtonElement>('pause');
 const cancelButton = element<HTMLButtonElement>('cancel');
 const formatSelect = element<HTMLSelectElement>('format');
 const formulasBox = element<HTMLInputElement>('formulas');
@@ -31,6 +32,7 @@ const logArea = element<HTMLElement>('log');
 let port: chrome.runtime.Port | null = null;
 /** Position of the tab being scanned, for turning per-tab progress into an overall figure. */
 let currentSheet = { index: 0, count: 1 };
+let paused = false;
 
 function log(message: string): void {
   const time = new Date().toLocaleTimeString('vi-VN', { hour12: false });
@@ -43,12 +45,19 @@ function setProgress(percent: number): void {
   percentLabel.textContent = `${percent}%`;
 }
 
+function setPaused(value: boolean): void {
+  paused = value;
+  pauseButton.textContent = paused ? 'Tiếp tục' : 'Tạm dừng';
+}
+
 function setRunning(running: boolean): void {
   exportButton.disabled = running;
   formatSelect.disabled = running;
   formulasBox.disabled = running;
   allSheetsBox.disabled = running;
   cancelButton.disabled = !running;
+  pauseButton.disabled = !running;
+  if (!running) setPaused(false);
 }
 
 function finish(): void {
@@ -103,6 +112,7 @@ async function onContentMessage(
             `${model.cells.length} ô có dữ liệu, ${model.merges.length} vùng gộp.`,
         );
       }
+      for (const warning of sheets.flatMap((model) => model.warnings)) log(`Cảnh báo: ${warning}`);
       try {
         log(await deliver(sheets, format, options));
       } catch (error) {
@@ -158,9 +168,17 @@ async function start(): Promise<void> {
 
 exportButton.addEventListener('click', () => void start());
 
+pauseButton.addEventListener('click', () => {
+  if (!port) return;
+  setPaused(!paused);
+  log(paused ? 'Đã tạm dừng.' : 'Tiếp tục quét…');
+  port.postMessage({ type: paused ? 'pause' : 'resume' } satisfies PopupMessage);
+});
+
 cancelButton.addEventListener('click', () => {
   if (!port) return;
   cancelButton.disabled = true;
+  pauseButton.disabled = true;
   log('Đang hủy…');
   port.postMessage({ type: 'cancel' } satisfies PopupMessage);
 });
