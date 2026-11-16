@@ -121,11 +121,13 @@ interface Layout {
 function planLayout(model: SheetModel): Layout {
   const grid = toGrid(model);
   const lines = (value: string) => stripControlChars(value).replace(/^'/, '').split('\n');
+  // A blank cell kept only for its colour does not stop text spilling into it.
   const occupied = (row: number, col: number) =>
-    grid.cellAt(row, col) !== undefined || grid.isCovered(row, col);
+    (grid.cellAt(row, col)?.value ?? '') !== '' || grid.isCovered(row, col);
 
   const wrapping = new Set<string>();
   for (const { row, col, value } of model.cells) {
+    if (value === '') continue;
     const merge = grid.mergeAt(row, col);
     const boxedIn = merge !== undefined || value.includes('\n') || occupied(row, col + 1);
     if (boxedIn) wrapping.add(`${row},${col}`);
@@ -175,7 +177,7 @@ function fillWorksheet(sheet: Worksheet, model: SheetModel, options: ExportOptio
   for (const { row, col, value, style } of model.cells) {
     const cell = sheet.getCell(row + 1, col + 1);
     const text = stripControlChars(value);
-    cell.value = toXlsxValue(text, options);
+    if (text !== '') cell.value = toXlsxValue(text, options);
 
     const font = toFont(style);
     if (Object.keys(font).length > 0) cell.font = font;

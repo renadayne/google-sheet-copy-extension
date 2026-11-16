@@ -4,7 +4,8 @@ Extension Chrome (Manifest V3) xuất nội dung một Google Sheet đang mở r
 chép vào clipboard dạng bảng HTML để dán sang sheet khác.
 
 Extension không gọi API của Google. Nó đọc trực tiếp giao diện Sheets: di chuyển con trỏ qua
-từng ô, đọc nội dung ở thanh công thức và định dạng ở thanh công cụ.
+từng ô, đọc nội dung ở thanh công thức, định dạng ở thanh công cụ, và màu nền ô từ chính điểm ảnh
+Sheets vẽ trên lưới.
 
 ## Cài đặt (load unpacked)
 
@@ -67,21 +68,28 @@ quay lại đúng tab và ô đang dở. Khi xong hoặc hủy, con trỏ đư�
 - Chỉ chuỗi số đơn giản như `42` hay `3.14` được ghi thành kiểu số trong xlsx. Ngày tháng, tiền
   tệ, phần trăm và số dùng dấu phẩy thập phân được ghi thành văn bản. Định dạng số không được
   giữ.
-- Ô trống không được ghi lại, nên ô trống có màu nền sẽ mất màu.
+- Ô trống có màu nền được ghi lại (chỉ màu, không có giá trị) khi lượt quét đi qua nó. Lượt quét
+  nhảy qua dãy ô trống bằng Ctrl+→, nên ô trống có màu nằm sau một ô trống không màu có thể bị bỏ
+  sót.
 - Ô mà Sheets đã tự đổi kiểu sẽ ra giá trị gốc chứ không phải chữ đang hiển thị. Ví dụ ô hiện
   `2.4` nhưng thực chất là ngày thì xuất ra `02/04/2026`.
 
 **Về định dạng**
 
-- **Sheet ở chế độ chỉ xem không có định dạng.** Định dạng được đọc từ các nút trên thanh công
-  cụ (font, cỡ chữ, đậm, nghiêng, màu chữ, màu nền, canh lề), và Sheets ẩn các nút này khi bạn
-  chỉ có quyền xem. File xuất ra khi đó chỉ có giá trị, ô gộp và bố cục ước lượng.
+- **Màu nền ô** được đọc từ canvas lưới của Sheets: lấy mẫu vài điểm ảnh ở dải trên cùng của ô
+  đang chọn (vị trí lấy từ khung chọn `.active-cell-border`). Cách này chạy cả khi chỉ có quyền
+  xem. Nếu không đọc được (ô nằm ngoài màn hình, không tìm thấy canvas) thì quay về đọc nút màu
+  nền trên thanh công cụ. Ô có chữ lớn hoặc nhiều dòng lấp kín phần trên có thể đọc sai màu.
+  Màu của định dạng có điều kiện và màu xen kẽ cũng được lấy, vì đó là màu đang hiển thị.
+- **Sheet ở chế độ chỉ xem không có định dạng chữ.** Font, cỡ chữ, đậm, nghiêng, màu chữ, canh lề
+  được đọc từ các nút trên thanh công cụ, và Sheets ẩn các nút này khi bạn chỉ có quyền xem. File
+  xuất ra khi đó chỉ có giá trị, màu nền, ô gộp và bố cục ước lượng.
 - Khi có quyền sửa, định dạng lấy từ thanh công cụ nên áp cho cả ô. Định dạng nhiều kiểu trong
   một ô (rich text) bị mất.
 - Độ rộng cột và chiều cao hàng không đọc được. File xlsx ước lượng chúng từ nội dung: cột vừa
   với dòng dài nhất (tối đa 60 ký tự), chữ tự xuống dòng và canh giữa theo chiều dọc.
 - Không đọc: viền ô, gạch chân (thanh công cụ Sheets không có nút này), gạch ngang, canh lề dọc,
-  định dạng có điều kiện, kiểm tra dữ liệu, ghi chú, bình luận, liên kết, hình ảnh, biểu đồ.
+  kiểm tra dữ liệu, ghi chú, bình luận, liên kết, hình ảnh, biểu đồ.
 
 **Về ô gộp**
 
@@ -119,7 +127,8 @@ npm run format
 
 Cấu trúc:
 
-- `src/content/` – content script: đọc DOM (`dom-reader.ts`), điều hướng (`navigator.ts`), quét
+- `src/content/` – content script: đọc DOM (`dom-reader.ts`), đọc màu nền từ canvas
+  (`canvas-reader.ts`), điều hướng (`navigator.ts`), quét
   (`extractor.ts`, `sheet-tabs.ts`).
 - `src/exporters/` – `xlsx-exporter.ts` (ExcelJS), `html-exporter.ts`, `csv-exporter.ts`.
 - `src/popup/` – giao diện popup; nhận kết quả quét và chạy exporter.
