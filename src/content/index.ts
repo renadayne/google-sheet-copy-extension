@@ -1,6 +1,7 @@
 // Content script — runs on https://docs.google.com/spreadsheets/*
 
 import { type ContentMessage, EXPORT_PORT, type PopupMessage } from '../shared/messages';
+import { activeCellRect, readCanvasFillColor } from './canvas-reader';
 import {
   readActiveSheetName,
   readFileTitle,
@@ -27,6 +28,8 @@ function inspectSheetUi(): void {
   console.log('Formula bar:', readFormulaBar());
   console.log('Name box   :', readNameBox());
   console.log('Toolbar    :', readToolbarState());
+  console.log('Cell rect  :', activeCellRect());
+  console.log('Canvas fill:', readCanvasFillColor());
 
   const missing = Object.values(SELECTORS).filter((selector) => !document.querySelector(selector));
   if (missing.length > 0) console.warn('Elements not found:', missing);
@@ -62,6 +65,7 @@ Object.assign(globalThis, {
     readFormulaBar,
     readNameBox,
     readToolbarState,
+    readCanvasFillColor,
     goToCell,
     pressCtrlEnd,
     getUsedRange,

@@ -1,7 +1,8 @@
 // Walks the data area of the active sheet and collects every cell's content,
 // formatting and merged ranges.
 
-import type { CellValue, MergeRange, SheetModel } from '../shared/model';
+import type { CellStyle, CellValue, MergeRange, SheetModel } from '../shared/model';
+import { readCanvasFillColor } from './canvas-reader';
 import { readActiveSheetName, readFileTitle, readToolbarState } from './dom-reader';
 import {
   type CellPosition,
@@ -140,6 +141,16 @@ async function enterRow(scan: Scan, row: number, col: number): Promise<Stop | nu
   return null;
 }
 
+/**
+ * Formatting of the active cell. The background colour comes from the grid canvas,
+ * which shows it even in view-only mode; the toolbar is only a fallback for it.
+ */
+function readCellStyle(): CellStyle {
+  const style = readToolbarState();
+  const canvas = readCanvasFillColor();
+  return canvas ? { ...style, fillColor: canvas.fill } : style;
+}
+
 /** True if the name box text `ref` is the stop `stop` of `row`. */
 function isAt(ref: string, row: number, stop: Stop): boolean {
   const first = parseA1(ref, 'first');
@@ -178,15 +189,19 @@ async function extractRow(scan: Scan, row: number): Promise<void> {
     rereads = 0;
 
     const value = cell.text;
-    if (value !== '') {
-      scan.cells.push({ row: row - 1, col: stop.col - 1, value, style: readToolbarState() });
+    const style = readCellStyle();
+    // A blank cell is only worth keeping for its background colour.
+    const coloured = value === '' && style.fillColor !== null;
+    if (value !== '' || coloured) {
+      scan.cells.push({ row: row - 1, col: stop.col - 1, value, style });
     }
     if (stop.right >= scan.cols) return;
 
     // From an empty cell, Ctrl+Right lands on the next cell with data (or the edge
-    // of the sheet), so everything it skips is known to be empty.
+    // of the sheet), so everything it skips is known to be empty. A coloured blank
+    // is often one of a run (a highlighted band), so step one cell at a time there.
     const nextCol = stop.right + 1;
-    const moved = await pressNavKey('ArrowRight', { ctrl: value === '' });
+    const moved = await pressNavKey('ArrowRight', { ctrl: value === '' && !coloured });
     // If the key press was lost, or landed somewhere unexpected, address the next
     // cell directly instead: that cannot overshoot.
     const landing = moved ? await settle(scan, row, nextCol) : 'lost';
